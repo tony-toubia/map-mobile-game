@@ -764,6 +764,146 @@ class Game extends EventEmitter {
                 ctx.stroke();
                 ctx.globalAlpha = 1;
                 break;
+
+            case 'orbital_warning':
+                // Pulsing warning circle
+                ctx.globalAlpha = 0.3 + Math.sin(Date.now() / 100) * 0.2;
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, effect.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#ff0000';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+                break;
+
+            case 'homing_mine':
+                const mineX = effect.x - this.camera.x;
+                const mineY = effect.y - this.camera.y;
+                ctx.fillStyle = effect.color;
+                ctx.beginPath();
+                ctx.arc(mineX, mineY, effect.radius, 0, Math.PI * 2);
+                ctx.fill();
+                // Glow
+                ctx.globalAlpha = 0.5;
+                ctx.beginPath();
+                ctx.arc(mineX, mineY, effect.radius * 1.5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                break;
+
+            case 'lightning_storm':
+                ctx.globalAlpha = 0.3;
+                ctx.fillStyle = effect.color;
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, effect.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                break;
+
+            case 'vortex':
+                ctx.globalAlpha = 0.4 * (1 - effect.age);
+                const vortexGrad = ctx.createRadialGradient(screenX, screenY, 0, screenX, screenY, effect.radius);
+                vortexGrad.addColorStop(0, effect.color);
+                vortexGrad.addColorStop(1, 'transparent');
+                ctx.fillStyle = vortexGrad;
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, effect.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                break;
+
+            case 'supernova':
+                ctx.globalAlpha = 0.3;
+                const supernovaGrad = ctx.createRadialGradient(screenX, screenY, 0, screenX, screenY, effect.radius);
+                supernovaGrad.addColorStop(0, effect.color);
+                supernovaGrad.addColorStop(1, 'transparent');
+                ctx.fillStyle = supernovaGrad;
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, effect.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                break;
+
+            case 'lava_pool':
+                ctx.globalAlpha = 0.6 * (1 - effect.age * 0.5);
+                const lavaGrad = ctx.createRadialGradient(screenX, screenY, 0, screenX, screenY, effect.radius);
+                lavaGrad.addColorStop(0, '#ff6600');
+                lavaGrad.addColorStop(0.5, '#ff4400');
+                lavaGrad.addColorStop(1, '#ff220066');
+                ctx.fillStyle = lavaGrad;
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, effect.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                break;
+
+            case 'decoy':
+                const decoyX = effect.x - this.camera.x;
+                const decoyY = effect.y - this.camera.y;
+                ctx.globalAlpha = 0.7 * (1 - effect.age);
+                ctx.fillStyle = effect.color;
+                ctx.beginPath();
+                ctx.arc(decoyX, decoyY, effect.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#ffffff';
+                ctx.font = `${effect.radius}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(effect.icon, decoyX, decoyY);
+                ctx.globalAlpha = 1;
+                break;
+
+            case 'slash':
+                ctx.globalAlpha = 1 - effect.age;
+                ctx.strokeStyle = effect.color;
+                ctx.lineWidth = 4;
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, effect.range, effect.startAngle, effect.endAngle);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+                break;
+
+            case 'shield':
+                if (effect.entity) {
+                    const shieldX = effect.entity.x - this.camera.x;
+                    const shieldY = effect.entity.y - this.camera.y;
+                    ctx.globalAlpha = 0.5 * (1 - effect.age);
+                    ctx.strokeStyle = effect.color;
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.arc(shieldX, shieldY, effect.radius, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.globalAlpha = 1;
+                }
+                break;
+
+            case 'cone':
+                ctx.globalAlpha = 0.5 * (1 - effect.age);
+                ctx.fillStyle = effect.color;
+                ctx.beginPath();
+                ctx.moveTo(screenX, screenY);
+                ctx.arc(screenX, screenY, effect.range, effect.angle - effect.halfAngle, effect.angle + effect.halfAngle);
+                ctx.closePath();
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                break;
+
+            case 'beam':
+                const fromX = effect.from.x - this.camera.x;
+                const fromY = effect.from.y - this.camera.y;
+                const toX = effect.to.x - this.camera.x;
+                const toY = effect.to.y - this.camera.y;
+                ctx.globalAlpha = 1 - effect.age;
+                ctx.strokeStyle = effect.color;
+                ctx.lineWidth = 4;
+                ctx.beginPath();
+                ctx.moveTo(fromX, fromY);
+                ctx.lineTo(toX, toY);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+                break;
         }
     }
 
@@ -1128,6 +1268,486 @@ class Game extends EventEmitter {
         }
 
         this.createShockwave(user, 50);
+    }
+
+    // ==================== MISSING ABILITY FUNCTIONS ====================
+
+    getDownedAllyInRange(user, range) {
+        for (const entity of this.entities) {
+            if (entity.team === user.team && entity !== user && entity.isDowned) {
+                const dist = Utils.distance(user.x, user.y, entity.x, entity.y);
+                if (dist < range) {
+                    return entity;
+                }
+            }
+        }
+        return null;
+    }
+
+    createShieldEffect(target) {
+        this.effects.push({
+            type: 'shield',
+            x: target.x,
+            y: target.y,
+            entity: target,
+            radius: target.radius + 10,
+            color: '#00aaff',
+            life: 0.5,
+            duration: 0.5,
+            age: 0
+        });
+    }
+
+    cloakAlliesInRange(user, range, duration) {
+        for (const entity of this.entities) {
+            if (entity.team === user.team && entity.isAlive) {
+                const dist = Utils.distance(user.x, user.y, entity.x, entity.y);
+                if (dist < range) {
+                    entity.addBuff({
+                        id: 'invisible',
+                        name: 'Cloaked',
+                        duration: duration,
+                        invisible: true,
+                        color: 'rgba(100, 100, 255, 0.5)'
+                    });
+                }
+            }
+        }
+        this.effects.push({
+            type: 'shockwave',
+            x: user.x,
+            y: user.y,
+            radius: range,
+            color: 'rgba(100, 100, 255, 0.5)',
+            life: 0.3,
+            duration: 0.3,
+            age: 0
+        });
+    }
+
+    createOrbitalStrike(x, y, options) {
+        // Warning indicator
+        this.effects.push({
+            type: 'orbital_warning',
+            x: x,
+            y: y,
+            radius: options.radius,
+            delay: options.delay,
+            damage: options.damage,
+            life: options.delay,
+            duration: options.delay,
+            age: 0,
+            update: (dt, game) => {
+                // When delay is over, create explosion
+                if (this.life <= dt) {
+                    game.createExplosion(x, y, {
+                        radius: options.radius,
+                        damage: options.damage,
+                        color: '#ff4400',
+                        owner: null
+                    });
+                    Audio.play('hit');
+                }
+            }
+        });
+    }
+
+    createSlashEffect(user) {
+        this.effects.push({
+            type: 'slash',
+            x: user.x,
+            y: user.y,
+            entity: user,
+            startAngle: user.facingAngle - Math.PI / 4,
+            endAngle: user.facingAngle + Math.PI / 4,
+            range: 50,
+            color: '#ff00ff',
+            life: 0.2,
+            duration: 0.2,
+            age: 0
+        });
+    }
+
+    createHomingMine(x, y, options) {
+        const mine = {
+            x: x + Utils.random(-30, 30),
+            y: y + Utils.random(-30, 30),
+            vx: 0,
+            vy: 0,
+            damage: options.damage,
+            speed: options.speed,
+            life: options.lifespan,
+            radius: 10,
+            color: '#00ffff',
+            target: null
+        };
+
+        this.effects.push({
+            type: 'homing_mine',
+            ...mine,
+            duration: options.lifespan,
+            age: 0,
+            update: (dt, game) => {
+                // Find nearest hunter
+                let nearest = null;
+                let nearestDist = Infinity;
+                for (const entity of game.entities) {
+                    if (entity.team === 'hunters' && entity.isAlive) {
+                        const dist = Utils.distance(mine.x, mine.y, entity.x, entity.y);
+                        if (dist < nearestDist) {
+                            nearestDist = dist;
+                            nearest = entity;
+                        }
+                    }
+                }
+
+                if (nearest) {
+                    const angle = Utils.angle(mine.x, mine.y, nearest.x, nearest.y);
+                    mine.vx = Math.cos(angle) * mine.speed;
+                    mine.vy = Math.sin(angle) * mine.speed;
+                    mine.x += mine.vx * dt;
+                    mine.y += mine.vy * dt;
+
+                    // Check collision
+                    if (nearestDist < nearest.radius + mine.radius) {
+                        nearest.takeDamage(mine.damage, null);
+                        game.createHitEffect(mine.x, mine.y, mine.color);
+                        mine.life = 0;
+                    }
+                }
+            }
+        });
+    }
+
+    createLightningStorm(x, y, options) {
+        const strikesRemaining = options.strikes;
+        const strikeInterval = options.duration / options.strikes;
+
+        this.effects.push({
+            type: 'lightning_storm',
+            x: x,
+            y: y,
+            radius: options.radius,
+            damage: options.damage,
+            strikesRemaining: strikesRemaining,
+            strikeTimer: 0,
+            strikeInterval: strikeInterval,
+            life: options.duration,
+            duration: options.duration,
+            age: 0,
+            color: '#00ffff',
+            update: (dt, game) => {
+                this.strikeTimer += dt;
+                if (this.strikeTimer >= this.strikeInterval && this.strikesRemaining > 0) {
+                    this.strikeTimer = 0;
+                    this.strikesRemaining--;
+
+                    // Random strike within radius
+                    const strikeX = x + Utils.random(-options.radius, options.radius);
+                    const strikeY = y + Utils.random(-options.radius, options.radius);
+
+                    game.createExplosion(strikeX, strikeY, {
+                        radius: 30,
+                        damage: options.damage / options.strikes,
+                        color: '#00ffff'
+                    });
+                }
+            }
+        });
+    }
+
+    createVortex(x, y, options) {
+        this.effects.push({
+            type: 'vortex',
+            x: x,
+            y: y,
+            radius: options.radius,
+            pullStrength: options.pullStrength,
+            life: options.duration,
+            duration: options.duration,
+            age: 0,
+            color: '#9900ff',
+            layer: 'below',
+            update: (dt, game) => {
+                // Pull hunters towards center
+                for (const entity of game.entities) {
+                    if (entity.team === 'hunters' && entity.isAlive) {
+                        const dist = Utils.distance(x, y, entity.x, entity.y);
+                        if (dist < options.radius && dist > 10) {
+                            const angle = Utils.angle(entity.x, entity.y, x, y);
+                            const pull = (options.pullStrength / dist) * dt;
+                            entity.x += Math.cos(angle) * pull;
+                            entity.y += Math.sin(angle) * pull;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    createAbduction(user, target, options) {
+        // Find nearest hunter in range
+        let nearestHunter = null;
+        let nearestDist = options.range;
+
+        for (const entity of this.entities) {
+            if (entity.team === 'hunters' && entity.isAlive) {
+                const dist = Utils.distance(user.x, user.y, entity.x, entity.y);
+                if (dist < nearestDist) {
+                    nearestDist = dist;
+                    nearestHunter = entity;
+                }
+            }
+        }
+
+        if (nearestHunter) {
+            // Teleport to hunter, grab them, teleport back
+            const startX = user.x;
+            const startY = user.y;
+
+            // Dash to hunter
+            user.x = nearestHunter.x;
+            user.y = nearestHunter.y;
+
+            // Deal damage
+            nearestHunter.takeDamage(options.damage, user);
+
+            // Bring hunter back
+            nearestHunter.x = startX;
+            nearestHunter.y = startY;
+            user.x = startX;
+            user.y = startY;
+
+            this.createHitEffect(nearestHunter.x, nearestHunter.y, '#ff00ff');
+        }
+    }
+
+    createSupernova(user, duration) {
+        this.effects.push({
+            type: 'supernova',
+            x: user.x,
+            y: user.y,
+            entity: user,
+            radius: 100,
+            life: duration,
+            duration: duration,
+            age: 0,
+            color: '#ff00ff',
+            layer: 'below',
+            damageTimer: 0,
+            update: (dt, game) => {
+                // Update position to follow user
+                this.x = user.x;
+                this.y = user.y;
+
+                // Damage enemies in range periodically
+                this.damageTimer += dt;
+                if (this.damageTimer >= 0.5) {
+                    this.damageTimer = 0;
+                    for (const entity of game.entities) {
+                        if (entity.team === 'hunters' && entity.isAlive) {
+                            const dist = Utils.distance(user.x, user.y, entity.x, entity.y);
+                            if (dist < this.radius) {
+                                entity.takeDamage(10, user);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    createDecoy(user, duration) {
+        // Create a fake entity that looks like the monster
+        const decoy = {
+            x: user.x,
+            y: user.y,
+            radius: user.radius,
+            color: user.color,
+            icon: user.icon,
+            facingAngle: user.facingAngle,
+            vx: Math.cos(user.facingAngle) * 100,
+            vy: Math.sin(user.facingAngle) * 100
+        };
+
+        this.effects.push({
+            type: 'decoy',
+            ...decoy,
+            life: duration,
+            duration: duration,
+            age: 0,
+            update: (dt, game) => {
+                // Move decoy forward
+                decoy.x += decoy.vx * dt;
+                decoy.y += decoy.vy * dt;
+
+                // Constrain to map
+                const constrained = game.map.constrainToMap(decoy.x, decoy.y, decoy.radius);
+                decoy.x = constrained.x;
+                decoy.y = constrained.y;
+            }
+        });
+    }
+
+    createLavaBomb(user, target, options) {
+        // Create projectile
+        this.createProjectile(user, target, {
+            speed: 300,
+            damage: options.damage,
+            color: '#ff4400',
+            size: 15,
+            explosive: true,
+            explosionRadius: 60
+        });
+
+        // Create lava pool at target after delay
+        setTimeout(() => {
+            this.effects.push({
+                type: 'lava_pool',
+                x: target.x,
+                y: target.y,
+                radius: 50,
+                damage: options.poolDamage,
+                life: options.poolDuration,
+                duration: options.poolDuration,
+                age: 0,
+                color: '#ff4400',
+                layer: 'below',
+                damageTimer: 0,
+                update: (dt, game) => {
+                    this.damageTimer += dt;
+                    if (this.damageTimer >= 0.5) {
+                        this.damageTimer = 0;
+                        for (const entity of game.entities) {
+                            if (entity.team === 'hunters' && entity.isAlive) {
+                                const dist = Utils.distance(this.x, this.y, entity.x, entity.y);
+                                if (dist < this.radius) {
+                                    entity.takeDamage(this.damage, null);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }, 500);
+    }
+
+    createRockWall(user, target, options) {
+        const angle = Utils.angle(user.x, user.y, target.x, target.y);
+        const perpAngle = angle + Math.PI / 2;
+
+        // Create wall segments
+        const segments = 5;
+        const segmentWidth = options.width / segments;
+
+        for (let i = 0; i < segments; i++) {
+            const offset = (i - segments / 2) * segmentWidth;
+            const wallX = target.x + Math.cos(perpAngle) * offset;
+            const wallY = target.y + Math.sin(perpAngle) * offset;
+
+            // Add temporary obstacle
+            const wall = {
+                type: 'rock',
+                x: wallX,
+                y: wallY,
+                radius: 25,
+                color: '#654321',
+                temporary: true
+            };
+            this.map.obstacles.push(wall);
+
+            // Remove after duration
+            setTimeout(() => {
+                const index = this.map.obstacles.indexOf(wall);
+                if (index !== -1) {
+                    this.map.obstacles.splice(index, 1);
+                }
+            }, options.duration * 1000);
+        }
+
+        Audio.play('hit');
+    }
+
+    createTongueGrab(user, target, options) {
+        // Find nearest hunter in direction
+        const angle = Utils.angle(user.x, user.y, target.x, target.y);
+        let nearestHunter = null;
+        let nearestDist = options.range || 300;
+
+        for (const entity of this.entities) {
+            if (entity.team === 'hunters' && entity.isAlive) {
+                const dist = Utils.distance(user.x, user.y, entity.x, entity.y);
+                const toEntity = Utils.angle(user.x, user.y, entity.x, entity.y);
+                const angleDiff = Math.abs(Utils.wrap(toEntity - angle, -Math.PI, Math.PI));
+
+                if (dist < nearestDist && angleDiff < Math.PI / 4) {
+                    nearestDist = dist;
+                    nearestHunter = entity;
+                }
+            }
+        }
+
+        if (nearestHunter) {
+            // Create beam effect
+            this.createBeam(user, nearestHunter, '#8B4513');
+
+            // Pull hunter towards monster
+            const pullAngle = Utils.angle(nearestHunter.x, nearestHunter.y, user.x, user.y);
+            nearestHunter.x += Math.cos(pullAngle) * (nearestDist * 0.7);
+            nearestHunter.y += Math.sin(pullAngle) * (nearestDist * 0.7);
+
+            // Deal damage
+            nearestHunter.takeDamage(options.damage, user);
+            this.createHitEffect(nearestHunter.x, nearestHunter.y, '#8B4513');
+        }
+    }
+
+    startRoll(user, target, options) {
+        const angle = Utils.angle(user.x, user.y, target.x, target.y);
+
+        user.addBuff({
+            id: 'rolling',
+            name: 'Rolling',
+            duration: options.duration,
+            speedMultiplier: 2,
+            color: '#654321'
+        });
+
+        // Set velocity in direction
+        user.vx = Math.cos(angle) * options.speed;
+        user.vy = Math.sin(angle) * options.speed;
+
+        // Create rolling effect
+        this.effects.push({
+            type: 'roll',
+            entity: user,
+            damage: options.damage,
+            life: options.duration,
+            duration: options.duration,
+            age: 0,
+            damageTimer: 0,
+            update: (dt, game) => {
+                this.damageTimer += dt;
+                if (this.damageTimer >= 0.2) {
+                    this.damageTimer = 0;
+                    // Damage hunters on contact
+                    for (const entity of game.entities) {
+                        if (entity.team === 'hunters' && entity.isAlive) {
+                            const dist = Utils.distance(user.x, user.y, entity.x, entity.y);
+                            if (dist < user.radius + entity.radius) {
+                                entity.takeDamage(this.damage, user);
+                                game.createHitEffect(entity.x, entity.y, '#654321');
+
+                                // Knockback
+                                const knockAngle = Utils.angle(user.x, user.y, entity.x, entity.y);
+                                entity.x += Math.cos(knockAngle) * 50;
+                                entity.y += Math.sin(knockAngle) * 50;
+                            }
+                        }
+                    }
+                }
+            }
+        });
     }
 }
 
