@@ -299,28 +299,75 @@ class Hunter extends Entity {
             this.abilities = cloneAbilities(abilitySet);
         }
 
+        // Jetpack system
         this.jetpackFuel = 100;
         this.maxJetpackFuel = 100;
         this.jetpackActive = false;
+        this.jetpackBoosting = false;
+
+        // Dodge/boost cooldown
+        this.dodgeCooldown = 0;
+        this.dodgeMaxCooldown = 3;
     }
 
     update(dt, game) {
         super.update(dt, game);
 
         // Jetpack fuel regeneration
-        if (!this.jetpackActive) {
-            this.jetpackFuel = Math.min(this.maxJetpackFuel, this.jetpackFuel + 20 * dt);
+        if (!this.jetpackBoosting) {
+            this.jetpackFuel = Math.min(this.maxJetpackFuel, this.jetpackFuel + 15 * dt);
+        }
+
+        // Dodge cooldown
+        if (this.dodgeCooldown > 0) {
+            this.dodgeCooldown -= dt;
         }
     }
 
-    useJetpack(dt) {
-        if (this.jetpackFuel > 0) {
-            this.jetpackActive = true;
-            this.jetpackFuel -= 30 * dt;
-            return true;
+    jetpackBoost(dirX, dirY) {
+        if (this.jetpackFuel < 25 || this.dodgeCooldown > 0) return false;
+
+        this.jetpackFuel -= 25;
+        this.dodgeCooldown = this.dodgeMaxCooldown;
+
+        // Burst of speed in the direction
+        const boostSpeed = 400;
+        this.x += dirX * boostSpeed * 0.15;
+        this.y += dirY * boostSpeed * 0.15;
+
+        Audio.play('ability');
+        Utils.vibrate(30);
+        return true;
+    }
+
+    render(ctx, camera) {
+        super.render(ctx, camera);
+
+        if (!this.isAlive) return;
+
+        const screenX = this.x - camera.x;
+        const screenY = this.y - camera.y;
+
+        // Jetpack fuel bar (small bar below character)
+        if (this.isPlayer) {
+            const fuelWidth = this.radius * 1.5;
+            const fuelHeight = 3;
+            const fuelY = screenY + this.radius + 8;
+            const fuelPct = this.jetpackFuel / this.maxJetpackFuel;
+
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(screenX - fuelWidth / 2, fuelY, fuelWidth, fuelHeight);
+            ctx.fillStyle = fuelPct > 0.3 ? '#00ccff' : '#ff6600';
+            ctx.fillRect(screenX - fuelWidth / 2, fuelY, fuelWidth * fuelPct, fuelHeight);
         }
-        this.jetpackActive = false;
-        return false;
+
+        // Role indicator for AI teammates
+        if (!this.isPlayer) {
+            ctx.fillStyle = this.color;
+            ctx.font = '10px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(this.hunterClass.toUpperCase(), screenX, screenY + this.radius + 15);
+        }
     }
 }
 
@@ -345,7 +392,7 @@ class Monster extends Entity {
         this.evolutionStage = 1;
         this.maxEvolutionStage = 3;
         this.evolutionProgress = 0;
-        this.evolutionThreshold = 100;
+        this.evolutionThreshold = 150; // Balanced: requires ~10 small or 5 medium kills
 
         // Store evolution multipliers
         this.evolutionMultipliers = monsterData.evolutionMultipliers || {
@@ -362,29 +409,135 @@ class Monster extends Entity {
             this.abilities = cloneAbilities(abilitySet);
         }
 
-        // Special monster attributes
-        this.smell = 100; // Detecting range
-        this.stealthMode = false;
+        // Monster armor system (Evolve-style: feeding grants armor)
+        this.monsterArmor = 0;
+        this.maxMonsterArmor = monsterData.stats.maxHealth * 0.5; // Armor pool = 50% of max health
+
+        // Sneak mode
+        this.sneaking = false;
+        this.sneakSpeedMultiplier = 0.5;
+
+        // Smell ability
+        this.smellRange = 300;
+        this.smellActive = false;
+        this.smellTimer = 0;
+        this.smellDuration = 3;
+        this.smellCooldown = 0;
+        this.smellMaxCooldown = 10;
+        this.detectedEntities = [];
+
+        // Evolution cocoon
+        this.isEvolving = false;
+        this.evolveTimer = 0;
+        this.evolveDuration = 5; // 5 seconds vulnerable while evolving
+        this.pendingEvolution = false;
+
+        // Ability points for evolution selection
+        this.abilityPoints = 0;
+        this.abilityLevels = {}; // Track individual ability upgrade levels
     }
 
     update(dt, game) {
         super.update(dt, game);
+
+        // Evolution cocoon phase
+        if (this.isEvolving) {
+            this.evolveTimer += dt;
+            if (this.evolveTimer >= this.evolveDuration) {
+                this.completeEvolution();
+            }
+            // Can't move while evolving
+            this.vx = 0;
+            this.vy = 0;
+            return;
+        }
+
+        // Smell cooldown
+        if (this.smellCooldown > 0) {
+            this.smellCooldown -= dt;
+        }
+
+        // Smell active timer
+        if (this.smellActive) {
+            this.smellTimer -= dt;
+            if (this.smellTimer <= 0) {
+                this.smellActive = false;
+                this.detectedEntities = [];
+            } else {
+                // Update detected entities
+                this.detectedEntities = [];
+                if (game) {
+                    for (const entity of game.entities) {
+                        if (entity !== this && entity.isAlive) {
+                            const dist = Utils.distance(this.x, this.y, entity.x, entity.y);
+                            if (dist < this.smellRange) {
+                                this.detectedEntities.push(entity);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sneaking speed modifier
+        if (this.sneaking) {
+            this.vx *= this.sneakSpeedMultiplier;
+            this.vy *= this.sneakSpeedMultiplier;
+        }
+    }
+
+    takeDamage(amount, attacker) {
+        if (!this.isAlive) return;
+
+        // Armor absorbs damage first (Evolve-style)
+        if (this.monsterArmor > 0) {
+            if (this.monsterArmor >= amount) {
+                this.monsterArmor -= amount;
+                Audio.play('damage');
+                Utils.vibrate(30);
+                return amount;
+            } else {
+                amount -= this.monsterArmor;
+                this.monsterArmor = 0;
+            }
+        }
+
+        // Remaining damage goes to health via parent
+        return super.takeDamage(amount, attacker);
     }
 
     feed(foodValue) {
         this.evolutionProgress += foodValue;
 
+        // Feeding also restores armor (Evolve-style)
+        this.monsterArmor = Math.min(this.maxMonsterArmor, this.monsterArmor + foodValue * 0.5);
+
+        // Check if ready to evolve
         if (this.evolutionProgress >= this.evolutionThreshold && this.evolutionStage < this.maxEvolutionStage) {
-            this.evolve();
+            this.pendingEvolution = true;
         }
     }
 
-    evolve() {
+    startEvolution() {
+        if (!this.pendingEvolution || this.isEvolving) return false;
         if (this.evolutionStage >= this.maxEvolutionStage) return false;
 
+        this.isEvolving = true;
+        this.evolveTimer = 0;
+
+        // Monster is vulnerable during cocoon
+        Audio.play('evolve');
+        Utils.vibrate([50, 30, 50]);
+
+        return true;
+    }
+
+    completeEvolution() {
+        this.isEvolving = false;
+        this.pendingEvolution = false;
         this.evolutionStage++;
         this.evolutionProgress = 0;
-        this.evolutionThreshold *= 1.5;
+        this.evolutionThreshold *= 1.8;
 
         // Apply evolution bonuses
         const mult = this.evolutionMultipliers;
@@ -395,29 +548,71 @@ class Monster extends Entity {
         this.speed *= mult.speed;
         this.radius *= mult.size;
 
-        // Upgrade abilities
-        for (const key in this.abilities) {
-            this.abilities[key].upgrade();
-        }
+        // Update armor pool
+        this.maxMonsterArmor = this.maxHealth * 0.5;
+        this.monsterArmor = this.maxMonsterArmor;
 
-        Audio.play('evolve');
+        // Grant ability points instead of auto-upgrading
+        this.abilityPoints += 3;
+
         Audio.play('roar');
-        Utils.vibrate([100, 50, 100]);
+        Utils.vibrate([100, 50, 100, 50, 100]);
 
         return true;
+    }
+
+    // Auto-evolve for AI monsters (upgrades abilities automatically)
+    evolve() {
+        if (this.evolutionStage >= this.maxEvolutionStage) return false;
+        this.pendingEvolution = true;
+        this.startEvolution();
+        // AI auto-spends ability points
+        this.autoUpgradeAbilities();
+        return true;
+    }
+
+    autoUpgradeAbilities() {
+        const keys = Object.keys(this.abilities);
+        while (this.abilityPoints > 0 && keys.length > 0) {
+            const key = Utils.randomPick(keys);
+            if (this.abilities[key].upgrade()) {
+                this.abilityPoints--;
+            } else {
+                keys.splice(keys.indexOf(key), 1);
+            }
+        }
     }
 
     getEvolutionPercent() {
         return (this.evolutionProgress / this.evolutionThreshold) * 100;
     }
 
-    toggleStealth() {
-        this.stealthMode = !this.stealthMode;
-        if (this.stealthMode) {
-            this.speed *= 0.5;
+    getArmorPercent() {
+        return this.maxMonsterArmor > 0 ? (this.monsterArmor / this.maxMonsterArmor) * 100 : 0;
+    }
+
+    toggleSneak() {
+        this.sneaking = !this.sneaking;
+        if (this.sneaking) {
+            this.addBuff({
+                id: 'sneaking',
+                name: 'Sneaking',
+                duration: 999,
+                invisible: true,
+                color: 'transparent'
+            });
         } else {
-            this.speed = this.baseSpeed;
+            this.buffs = this.buffs.filter(b => b.id !== 'sneaking');
         }
+    }
+
+    useSmell() {
+        if (this.smellCooldown > 0) return false;
+        this.smellActive = true;
+        this.smellTimer = this.smellDuration;
+        this.smellCooldown = this.smellMaxCooldown;
+        Audio.play('ability');
+        return true;
     }
 
     render(ctx, camera) {
@@ -426,6 +621,49 @@ class Monster extends Entity {
 
         const screenX = this.x - camera.x;
         const screenY = this.y - camera.y;
+
+        // Evolution cocoon rendering
+        if (this.isEvolving) {
+            const progress = this.evolveTimer / this.evolveDuration;
+
+            // Cocoon shell
+            ctx.fillStyle = `rgba(100, 0, 150, ${0.5 + progress * 0.3})`;
+            ctx.beginPath();
+            ctx.arc(screenX, screenY, this.radius * (1.2 + progress * 0.3), 0, Math.PI * 2);
+            ctx.fill();
+
+            // Pulsing energy
+            const pulse = Math.sin(Date.now() / 150) * 0.3 + 0.7;
+            ctx.globalAlpha = pulse;
+            const cocoonGrad = ctx.createRadialGradient(screenX, screenY, 0, screenX, screenY, this.radius * 1.8);
+            cocoonGrad.addColorStop(0, '#ff00ff');
+            cocoonGrad.addColorStop(0.5, '#9900ff88');
+            cocoonGrad.addColorStop(1, 'transparent');
+            ctx.fillStyle = cocoonGrad;
+            ctx.beginPath();
+            ctx.arc(screenX, screenY, this.radius * 1.8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+
+            // Progress bar
+            const barWidth = this.radius * 3;
+            const barY = screenY - this.radius - 30;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.fillRect(screenX - barWidth / 2, barY, barWidth, 8);
+            ctx.fillStyle = '#ff00ff';
+            ctx.fillRect(screenX - barWidth / 2, barY, barWidth * progress, 8);
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('EVOLVING...', screenX, barY - 5);
+            return;
+        }
+
+        // Sneak mode visual
+        if (this.sneaking) {
+            ctx.globalAlpha = 0.3;
+        }
 
         // Evolution glow based on stage
         if (this.evolutionStage > 1) {
@@ -442,11 +680,61 @@ class Monster extends Entity {
         // Call parent render
         super.render(ctx, camera);
 
+        if (this.sneaking) {
+            ctx.globalAlpha = 1;
+        }
+
+        // Armor bar (above health bar)
+        if (this.monsterArmor > 0) {
+            const armorWidth = this.radius * 2;
+            const armorHeight = 4;
+            const armorY = screenY - this.radius - 22;
+            const armorPct = this.monsterArmor / this.maxMonsterArmor;
+
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(screenX - armorWidth / 2, armorY, armorWidth, armorHeight);
+            ctx.fillStyle = '#4488cc';
+            ctx.fillRect(screenX - armorWidth / 2, armorY, armorWidth * armorPct, armorHeight);
+        }
+
         // Evolution stage indicator
-        ctx.fillStyle = '#9b59b6';
+        const stageColor = this.evolutionStage === 3 ? '#ff4444' : this.evolutionStage === 2 ? '#ffaa00' : '#9b59b6';
+        ctx.fillStyle = stageColor;
         ctx.font = 'bold 12px Arial';
         ctx.textAlign = 'center';
         ctx.fillText(`Stage ${this.evolutionStage}`, screenX, screenY + this.radius + 20);
+
+        // Pending evolution indicator
+        if (this.pendingEvolution && this.isPlayer) {
+            ctx.fillStyle = '#ff00ff';
+            ctx.font = 'bold 11px Arial';
+            ctx.fillText('READY TO EVOLVE', screenX, screenY + this.radius + 34);
+        }
+
+        // Smell detection indicators
+        if (this.smellActive && this.isPlayer) {
+            // Smell radius ring
+            ctx.globalAlpha = 0.15;
+            ctx.strokeStyle = '#ffaa00';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(screenX, screenY, this.smellRange, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+
+            // Highlight detected entities
+            for (const detected of this.detectedEntities) {
+                const dx = detected.x - camera.x;
+                const dy = detected.y - camera.y;
+                ctx.strokeStyle = detected.team === 'hunters' ? '#ff4444' : '#ffaa00';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath();
+                ctx.arc(dx, dy, detected.radius + 8, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+        }
     }
 }
 
@@ -454,11 +742,14 @@ class Monster extends Entity {
  * Wildlife (food for monster)
  */
 class Wildlife extends Entity {
-    constructor(x, y, type) {
+    constructor(x, y, type, isElite = false) {
         const wildlifeTypes = {
             small: { health: 20, foodValue: 15, speed: 80, radius: 12, color: '#8B4513', icon: '🐀' },
             medium: { health: 50, foodValue: 30, speed: 60, radius: 18, color: '#654321', icon: '🦌' },
-            large: { health: 100, foodValue: 50, speed: 40, radius: 25, color: '#4a3728', icon: '🦬' }
+            large: { health: 100, foodValue: 50, speed: 40, radius: 25, color: '#4a3728', icon: '🦬' },
+            elite_tyrant: { health: 200, foodValue: 80, speed: 50, radius: 35, color: '#cc2200', icon: '🦖', damage: 30 },
+            elite_mammoth: { health: 300, foodValue: 100, speed: 30, radius: 40, color: '#5544aa', icon: '🦣', damage: 25 },
+            elite_sloth: { health: 150, foodValue: 60, speed: 20, radius: 30, color: '#229944', icon: '🦥', damage: 15 }
         };
 
         const data = wildlifeTypes[type] || wildlifeTypes.small;
@@ -474,18 +765,52 @@ class Wildlife extends Entity {
         this.wanderTimer = 0;
         this.fleeTarget = null;
         this.state = 'wander';
+        this.isElite = isElite || type.startsWith('elite_');
+        this.isAggressive = this.isElite; // Elite wildlife fights back
+
+        // Elite buff granted on kill
+        if (this.isElite) {
+            const eliteBuffs = {
+                elite_tyrant: { id: 'elite_damage', name: 'Tyrant Strength', damageMultiplier: 1.35, duration: 120, color: '#ff4400' },
+                elite_mammoth: { id: 'elite_armor', name: 'Mammoth Hide', speedMultiplier: 1, duration: 120, color: '#5544aa', shield: 100 },
+                elite_sloth: { id: 'elite_regen', name: 'Sloth Vitality', duration: 120, color: '#229944' }
+            };
+            this.eliteBuff = eliteBuffs[type] || null;
+        }
     }
 
     update(dt, game) {
         super.update(dt, game);
 
-        // Simple AI - wander and flee from threats
+        // Simple AI - wander and flee from threats (or fight if elite)
         this.wanderTimer -= dt;
 
-        if (this.fleeTarget && this.fleeTarget.isAlive) {
+        // Elite wildlife: aggressive - attacks nearby non-wildlife
+        if (this.isAggressive && this.fleeTarget && this.fleeTarget.isAlive) {
+            const dist = Utils.distance(this.x, this.y, this.fleeTarget.x, this.fleeTarget.y);
+            if (dist < 60) {
+                // Attack
+                this.state = 'attack';
+                this.vx = 0;
+                this.vy = 0;
+                // Deal melee damage periodically
+                if (this.wanderTimer <= 0) {
+                    this.fleeTarget.takeDamage(this.damage || 10, this);
+                    this.wanderTimer = 1;
+                }
+            } else if (dist < 200) {
+                // Chase
+                const angle = Utils.angle(this.x, this.y, this.fleeTarget.x, this.fleeTarget.y);
+                this.vx = Math.cos(angle) * this.speed;
+                this.vy = Math.sin(angle) * this.speed;
+                this.state = 'chase';
+            } else {
+                this.fleeTarget = null;
+                this.state = 'wander';
+            }
+        } else if (this.fleeTarget && this.fleeTarget.isAlive && !this.isAggressive) {
             const dist = Utils.distance(this.x, this.y, this.fleeTarget.x, this.fleeTarget.y);
             if (dist < 200) {
-                // Flee
                 const angle = Utils.angle(this.fleeTarget.x, this.fleeTarget.y, this.x, this.y);
                 this.vx = Math.cos(angle) * this.speed;
                 this.vy = Math.sin(angle) * this.speed;
@@ -508,7 +833,33 @@ class Wildlife extends Entity {
 
     flee(threat) {
         this.fleeTarget = threat;
-        this.state = 'flee';
+        this.state = this.isAggressive ? 'chase' : 'flee';
+    }
+
+    render(ctx, camera) {
+        super.render(ctx, camera);
+
+        if (!this.isAlive || !this.isElite) return;
+
+        const screenX = this.x - camera.x;
+        const screenY = this.y - camera.y;
+
+        // Elite glow
+        ctx.globalAlpha = 0.3;
+        const glowGrad = ctx.createRadialGradient(screenX, screenY, this.radius, screenX, screenY, this.radius * 2);
+        glowGrad.addColorStop(0, this.color + '88');
+        glowGrad.addColorStop(1, 'transparent');
+        ctx.fillStyle = glowGrad;
+        ctx.beginPath();
+        ctx.arc(screenX, screenY, this.radius * 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+
+        // Elite label
+        ctx.fillStyle = '#ffd700';
+        ctx.font = 'bold 10px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('ELITE', screenX, screenY + this.radius + 15);
     }
 }
 

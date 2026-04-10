@@ -104,6 +104,42 @@ class Game extends EventEmitter {
             joystickKnob.style.transform = 'translate(0, 0)';
         });
 
+        // Aim joystick (right side for mobile)
+        const aimJoystickContainer = document.getElementById('aim-joystick-container');
+        const aimJoystickKnob = document.getElementById('aim-joystick-knob');
+
+        this.aimJoystick = {
+            active: false,
+            startX: 0,
+            startY: 0
+        };
+
+        if (aimJoystickContainer) {
+            aimJoystickContainer.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const touch = e.touches[0];
+                const rect = aimJoystickContainer.getBoundingClientRect();
+                this.aimJoystick.active = true;
+                this.aimJoystick.startX = rect.left + rect.width / 2;
+                this.aimJoystick.startY = rect.top + rect.height / 2;
+                this.updateAimJoystick(touch.clientX, touch.clientY, aimJoystickKnob);
+                this.input.shooting = true;
+            });
+
+            aimJoystickContainer.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                if (!this.aimJoystick.active) return;
+                const touch = e.touches[0];
+                this.updateAimJoystick(touch.clientX, touch.clientY, aimJoystickKnob);
+            });
+
+            aimJoystickContainer.addEventListener('touchend', () => {
+                this.aimJoystick.active = false;
+                this.input.shooting = false;
+                aimJoystickKnob.style.transform = 'translate(0, 0)';
+            });
+        }
+
         // Mouse input (for desktop testing)
         this.canvas.addEventListener('mousemove', (e) => {
             this.input.aimX = e.clientX;
@@ -118,20 +154,43 @@ class Game extends EventEmitter {
             this.input.shooting = false;
         });
 
-        // Touch for aiming
+        // Touch for aiming (fallback when no aim joystick used)
         this.canvas.addEventListener('touchstart', (e) => {
+            if (this.aimJoystick.active) return;
             const touch = e.touches[0];
             this.input.aimX = touch.clientX;
             this.input.aimY = touch.clientY;
         });
 
         this.canvas.addEventListener('touchmove', (e) => {
+            if (this.aimJoystick.active) return;
             if (e.touches.length > 1) {
+                e.preventDefault();
                 const touch = e.touches[1];
                 this.input.aimX = touch.clientX;
                 this.input.aimY = touch.clientY;
             }
         });
+    }
+
+    updateAimJoystick(touchX, touchY, knob) {
+        const dx = touchX - this.aimJoystick.startX;
+        const dy = touchY - this.aimJoystick.startY;
+        const maxDist = 50;
+
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const clampedDist = Math.min(dist, maxDist);
+        const angle = Math.atan2(dy, dx);
+        const clampedX = Math.cos(angle) * clampedDist;
+        const clampedY = Math.sin(angle) * clampedDist;
+
+        knob.style.transform = `translate(${clampedX}px, ${clampedY}px)`;
+
+        // Convert to world aim position
+        if (this.player && this.camera) {
+            this.input.aimX = this.canvas.width / 2 + clampedX * 5;
+            this.input.aimY = this.canvas.height / 2 + clampedY * 5;
+        }
     }
 
     updateJoystick(touchX, touchY, knob) {
@@ -165,6 +224,28 @@ class Game extends EventEmitter {
             case '5': this.useAbility('ability3'); break;
             case '6': this.useAbility('ability4'); break;
             case ' ': this.input.shooting = true; break;
+            case 'shift':
+                // Monster: toggle sneak; Hunter: jetpack dodge
+                if (this.player instanceof Monster) {
+                    this.player.toggleSneak();
+                } else if (this.player instanceof Hunter) {
+                    const dir = this.player.direction;
+                    this.player.jetpackBoost(dir.x || 0, dir.y || 1);
+                }
+                break;
+            case 'q':
+                // Monster: use smell
+                if (this.player instanceof Monster) {
+                    this.player.useSmell();
+                }
+                break;
+            case 'e':
+                // Monster: start evolution when ready
+                if (this.player instanceof Monster && this.player.pendingEvolution) {
+                    this.player.startEvolution();
+                    window.ui.showToast('Evolving! Stay hidden for 5 seconds...');
+                }
+                break;
             case 'escape':
                 if (this.running) {
                     window.ui.togglePause();
@@ -214,6 +295,30 @@ class Game extends EventEmitter {
             time: 0
         };
 
+        // Wildlife respawn system
+        this.wildlifeRespawnTimer = 0;
+        this.wildlifeRespawnInterval = 15; // seconds between respawn checks
+        this.maxWildlife = 20;
+
+        // Dropship respawn system
+        this.dropshipQueue = []; // dead hunters waiting for respawn
+        this.dropshipTimer = 0;
+        this.dropshipInterval = 30; // seconds between dropship arrivals
+        this.dropshipActive = false;
+
+        // Power relay objective (Evolve-style)
+        this.powerRelay = {
+            x: this.map.width / 2,
+            y: this.map.height / 2,
+            health: 500,
+            maxHealth: 500,
+            radius: 40,
+            active: false // becomes attackable at stage 3
+        };
+
+        // Screen shake
+        this.screenShake = { intensity: 0, duration: 0 };
+
         const difficulty = GameSettings.difficulty;
 
         if (role === 'hunter') {
@@ -261,6 +366,17 @@ class Game extends EventEmitter {
         for (const spawnPoint of this.map.spawnPoints.wildlife) {
             const wildlife = new Wildlife(spawnPoint.x, spawnPoint.y, spawnPoint.type);
             this.entities.push(wildlife);
+        }
+
+        // Spawn 2-3 elite wildlife in strategic locations
+        const eliteTypes = ['elite_tyrant', 'elite_mammoth', 'elite_sloth'];
+        const eliteCount = Utils.randomInt(2, 3);
+        for (let i = 0; i < eliteCount; i++) {
+            const x = Utils.random(200, this.map.width - 200);
+            const y = Utils.random(200, this.map.height - 200);
+            const eliteType = eliteTypes[i % eliteTypes.length];
+            const elite = new Wildlife(x, y, eliteType);
+            this.entities.push(elite);
         }
 
         // Initialize player upgrades
@@ -336,6 +452,12 @@ class Game extends EventEmitter {
         // Handle wildlife fleeing from threats
         this.updateWildlifeBehavior();
 
+        // Respawn wildlife periodically
+        this.updateWildlifeRespawn(dt);
+
+        // Update dropship respawn timers
+        this.updateDropshipRespawn(dt);
+
         // Update projectiles
         this.updateProjectiles(dt);
 
@@ -355,6 +477,9 @@ class Game extends EventEmitter {
 
         // Check collisions
         this.checkCollisions();
+
+        // Update screen shake
+        this.updateScreenShake(dt);
 
         // Update camera
         this.camera.follow(this.player);
@@ -427,9 +552,30 @@ class Game extends EventEmitter {
                     if (other.team !== 'wildlife' && other.isAlive) {
                         const dist = Utils.distance(entity.x, entity.y, other.x, other.y);
                         if (dist < 150) {
-                            entity.flee(other);
+                            entity.flee(other); // Elite wildlife will chase instead of flee
                             break;
                         }
+                    }
+                }
+
+                // Elite wildlife killed by melee - grant buff
+                if (!entity.isAlive && entity.isElite && entity.eliteBuff) {
+                    // Find who killed it (closest enemy)
+                    let killer = null;
+                    let minDist = 100;
+                    for (const other of this.entities) {
+                        if (other.team !== 'wildlife' && other.isAlive) {
+                            const dist = Utils.distance(entity.x, entity.y, other.x, other.y);
+                            if (dist < minDist) {
+                                minDist = dist;
+                                killer = other;
+                            }
+                        }
+                    }
+                    if (killer) {
+                        killer.addBuff({ ...entity.eliteBuff });
+                        window.ui.showToast(`${entity.eliteBuff.name} acquired!`);
+                        entity.eliteBuff = null; // Prevent double-granting
                     }
                 }
             }
@@ -510,9 +656,16 @@ class Game extends EventEmitter {
                         });
                     }
 
-                    // Check if wildlife was killed by monster
-                    if (!entity.isAlive && entity instanceof Wildlife && proj.owner instanceof Monster) {
-                        proj.owner.feed(entity.foodValue);
+                    // Check if wildlife was killed
+                    if (!entity.isAlive && entity instanceof Wildlife) {
+                        if (proj.owner instanceof Monster) {
+                            proj.owner.feed(entity.foodValue);
+                        }
+                        // Grant elite buff to killer
+                        if (entity.isElite && entity.eliteBuff && proj.owner) {
+                            proj.owner.addBuff({ ...entity.eliteBuff });
+                            window.ui.showToast(`${entity.eliteBuff.name} acquired!`);
+                        }
                     }
 
                     this.projectiles.splice(i, 1);
@@ -615,13 +768,37 @@ class Game extends EventEmitter {
             return;
         }
 
-        // Monster wins if all hunters are dead
-        if (hunters.length === 0) {
+        // Queue dead AI hunters for dropship
+        for (const entity of this.entities) {
+            if (entity instanceof Hunter && !entity.isAlive && entity.isDowned) {
+                entity.isDowned = false; // Mark as fully dead, not downed
+                if (!entity.isPlayer) {
+                    this.queueForDropship(entity);
+                }
+                this.stats.huntersKilled++;
+            }
+        }
+
+        // Monster wins if player hunter is dead (no self-respawn)
+        if (this.player instanceof Hunter && !this.player.isAlive) {
+            this.endGame(false);
+            return;
+        }
+
+        // Monster wins if all hunters dead AND no dropship incoming
+        if (hunters.length === 0 && this.dropshipQueue.length === 0) {
             this.endGame(this.player instanceof Monster);
             return;
         }
 
-        // Monster wins if fully evolved and timer runs out (already handled in update)
+        // Activate power relay when monster reaches stage 3
+        if (monster && monster.evolutionStage >= 3 && !this.powerRelay.active) {
+            this.powerRelay.active = true;
+            window.ui.showToast('Monster reached Stage 3! Defend the Power Relay!');
+        }
+
+        // Update power relay
+        this.updatePowerRelay(0.016);
     }
 
     endGame(playerWon) {
@@ -633,12 +810,23 @@ class Game extends EventEmitter {
     render() {
         const ctx = this.ctx;
 
+        // Apply screen shake
+        const shake = this.getScreenShakeOffset();
+
         // Clear canvas
         ctx.fillStyle = '#1a1a2e';
         ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+        ctx.save();
+        ctx.translate(shake.x, shake.y);
+
         // Render map
         this.map.render(ctx, this.camera, this.canvas.width, this.canvas.height);
+
+        // Render power relay
+        if (this.powerRelay) {
+            this.renderPowerRelay(ctx);
+        }
 
         // Render dome
         if (this.dome) {
@@ -675,12 +863,19 @@ class Game extends EventEmitter {
             this.renderEffect(ctx, effect);
         }
 
+        ctx.restore(); // End screen shake
+
         // Render minimap
         this.map.renderMinimap(this.minimapCtx, this.entities, this.player, 120, 120);
 
         // Render FPS if enabled
         if (GameSettings.showFPS) {
             this.renderFPS(ctx);
+        }
+
+        // Render dropship indicator
+        if (this.dropshipActive) {
+            this.renderDropshipTimer(ctx);
         }
     }
 
@@ -970,6 +1165,71 @@ class Game extends EventEmitter {
         ctx.fillText(`${fps} FPS`, this.canvas.width - 10, 80);
     }
 
+    renderPowerRelay(ctx) {
+        const relay = this.powerRelay;
+        const screenX = relay.x - this.camera.x;
+        const screenY = relay.y - this.camera.y;
+
+        if (!this.camera.isOnScreen(relay.x, relay.y, 60)) return;
+
+        // Base structure
+        ctx.fillStyle = relay.active ? '#ff6600' : '#4488aa';
+        ctx.beginPath();
+        ctx.arc(screenX, screenY, relay.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Pulsing glow when active
+        if (relay.active) {
+            const pulse = 0.3 + Math.sin(Date.now() / 300) * 0.2;
+            ctx.globalAlpha = pulse;
+            const gradient = ctx.createRadialGradient(screenX, screenY, relay.radius, screenX, screenY, relay.radius * 2.5);
+            gradient.addColorStop(0, '#ff660088');
+            gradient.addColorStop(1, 'transparent');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(screenX, screenY, relay.radius * 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+
+        // Icon
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `${relay.radius}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('⚡', screenX, screenY);
+
+        // Health bar
+        const barWidth = relay.radius * 3;
+        const barHeight = 8;
+        const barY = screenY - relay.radius - 20;
+        const healthPct = relay.health / relay.maxHealth;
+
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(screenX - barWidth / 2, barY, barWidth, barHeight);
+        ctx.fillStyle = healthPct > 0.5 ? '#2ed573' : healthPct > 0.25 ? '#ffa502' : '#ff4757';
+        ctx.fillRect(screenX - barWidth / 2, barY, barWidth * healthPct, barHeight);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(screenX - barWidth / 2, barY, barWidth, barHeight);
+
+        // Label
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 11px Arial';
+        ctx.fillText('POWER RELAY', screenX, screenY + relay.radius + 15);
+    }
+
+    renderDropshipTimer(ctx) {
+        const remaining = Math.ceil(this.dropshipInterval - this.dropshipTimer);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(this.canvas.width / 2 - 80, 50, 160, 30);
+        ctx.fillStyle = '#00aaff';
+        ctx.font = 'bold 14px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`DROPSHIP: ${remaining}s`, this.canvas.width / 2, 65);
+    }
+
     // ==================== ABILITY EFFECTS ====================
 
     useAbility(abilityKey) {
@@ -1041,6 +1301,9 @@ class Game extends EventEmitter {
 
         Audio.play('hit');
         Utils.vibrate(100);
+
+        // Screen shake proportional to explosion size
+        this.addScreenShake(Math.min(options.radius * 0.1, 8), 0.3);
     }
 
     createHitEffect(x, y, color) {
@@ -1327,7 +1590,7 @@ class Game extends EventEmitter {
 
     createOrbitalStrike(x, y, options) {
         // Warning indicator
-        this.effects.push({
+        const effect = {
             type: 'orbital_warning',
             x: x,
             y: y,
@@ -1337,19 +1600,21 @@ class Game extends EventEmitter {
             life: options.delay,
             duration: options.delay,
             age: 0,
-            update: (dt, game) => {
-                // When delay is over, create explosion
-                if (this.life <= dt) {
-                    game.createExplosion(x, y, {
-                        radius: options.radius,
-                        damage: options.damage,
-                        color: '#ff4400',
-                        owner: null
-                    });
-                    Audio.play('hit');
-                }
+            triggered: false
+        };
+        effect.update = (dt, game) => {
+            if (!effect.triggered && effect.life <= dt) {
+                effect.triggered = true;
+                game.createExplosion(x, y, {
+                    radius: options.radius,
+                    damage: options.damage,
+                    color: '#ff4400',
+                    owner: null
+                });
+                Audio.play('hit');
             }
-        });
+        };
+        this.effects.push(effect);
     }
 
     createSlashEffect(user) {
@@ -1369,7 +1634,8 @@ class Game extends EventEmitter {
     }
 
     createHomingMine(x, y, options) {
-        const mine = {
+        const effect = {
+            type: 'homing_mine',
             x: x + Utils.random(-30, 30),
             y: y + Utils.random(-30, 30),
             vx: 0,
@@ -1377,83 +1643,82 @@ class Game extends EventEmitter {
             damage: options.damage,
             speed: options.speed,
             life: options.lifespan,
-            radius: 10,
-            color: '#00ffff',
-            target: null
-        };
-
-        this.effects.push({
-            type: 'homing_mine',
-            ...mine,
             duration: options.lifespan,
             age: 0,
-            update: (dt, game) => {
-                // Find nearest hunter
-                let nearest = null;
-                let nearestDist = Infinity;
-                for (const entity of game.entities) {
-                    if (entity.team === 'hunters' && entity.isAlive) {
-                        const dist = Utils.distance(mine.x, mine.y, entity.x, entity.y);
-                        if (dist < nearestDist) {
-                            nearestDist = dist;
-                            nearest = entity;
-                        }
-                    }
-                }
-
-                if (nearest) {
-                    const angle = Utils.angle(mine.x, mine.y, nearest.x, nearest.y);
-                    mine.vx = Math.cos(angle) * mine.speed;
-                    mine.vy = Math.sin(angle) * mine.speed;
-                    mine.x += mine.vx * dt;
-                    mine.y += mine.vy * dt;
-
-                    // Check collision
-                    if (nearestDist < nearest.radius + mine.radius) {
-                        nearest.takeDamage(mine.damage, null);
-                        game.createHitEffect(mine.x, mine.y, mine.color);
-                        mine.life = 0;
+            radius: 10,
+            color: '#00ffff'
+        };
+        effect.update = (dt, game) => {
+            // Find nearest hunter
+            let nearest = null;
+            let nearestDist = Infinity;
+            for (const entity of game.entities) {
+                if (entity.team === 'hunters' && entity.isAlive) {
+                    const dist = Utils.distance(effect.x, effect.y, entity.x, entity.y);
+                    if (dist < nearestDist) {
+                        nearestDist = dist;
+                        nearest = entity;
                     }
                 }
             }
-        });
+
+            if (nearest) {
+                const angle = Utils.angle(effect.x, effect.y, nearest.x, nearest.y);
+                effect.vx = Math.cos(angle) * effect.speed;
+                effect.vy = Math.sin(angle) * effect.speed;
+                effect.x += effect.vx * dt;
+                effect.y += effect.vy * dt;
+
+                // Check collision
+                if (nearestDist < nearest.radius + effect.radius) {
+                    nearest.takeDamage(effect.damage, null);
+                    game.createHitEffect(effect.x, effect.y, effect.color);
+                    game.createExplosion(effect.x, effect.y, {
+                        radius: 30,
+                        damage: 0,
+                        color: '#00ffff'
+                    });
+                    effect.life = 0;
+                }
+            }
+        };
+        this.effects.push(effect);
     }
 
     createLightningStorm(x, y, options) {
-        const strikesRemaining = options.strikes;
-        const strikeInterval = options.duration / options.strikes;
-
-        this.effects.push({
+        const effect = {
             type: 'lightning_storm',
             x: x,
             y: y,
             radius: options.radius,
             damage: options.damage,
-            strikesRemaining: strikesRemaining,
+            strikesRemaining: options.strikes,
             strikeTimer: 0,
-            strikeInterval: strikeInterval,
+            strikeInterval: options.duration / options.strikes,
             life: options.duration,
             duration: options.duration,
             age: 0,
-            color: '#00ffff',
-            update: (dt, game) => {
-                this.strikeTimer += dt;
-                if (this.strikeTimer >= this.strikeInterval && this.strikesRemaining > 0) {
-                    this.strikeTimer = 0;
-                    this.strikesRemaining--;
+            color: '#00ffff'
+        };
+        effect.update = (dt, game) => {
+            effect.strikeTimer += dt;
+            if (effect.strikeTimer >= effect.strikeInterval && effect.strikesRemaining > 0) {
+                effect.strikeTimer = 0;
+                effect.strikesRemaining--;
 
-                    // Random strike within radius
-                    const strikeX = x + Utils.random(-options.radius, options.radius);
-                    const strikeY = y + Utils.random(-options.radius, options.radius);
+                // Random strike within radius
+                const strikeX = x + Utils.random(-options.radius, options.radius);
+                const strikeY = y + Utils.random(-options.radius, options.radius);
 
-                    game.createExplosion(strikeX, strikeY, {
-                        radius: 30,
-                        damage: options.damage / options.strikes,
-                        color: '#00ffff'
-                    });
-                }
+                game.createExplosion(strikeX, strikeY, {
+                    radius: 30,
+                    damage: options.damage / options.strikes,
+                    color: '#00ffff'
+                });
+                Audio.play('hit');
             }
-        });
+        };
+        this.effects.push(effect);
     }
 
     createVortex(x, y, options) {
@@ -1523,7 +1788,7 @@ class Game extends EventEmitter {
     }
 
     createSupernova(user, duration) {
-        this.effects.push({
+        const effect = {
             type: 'supernova',
             x: user.x,
             y: user.y,
@@ -1534,32 +1799,35 @@ class Game extends EventEmitter {
             age: 0,
             color: '#ff00ff',
             layer: 'below',
-            damageTimer: 0,
-            update: (dt, game) => {
-                // Update position to follow user
-                this.x = user.x;
-                this.y = user.y;
+            damageTimer: 0
+        };
+        effect.update = (dt, game) => {
+            // Update position to follow user
+            effect.x = user.x;
+            effect.y = user.y;
 
-                // Damage enemies in range periodically
-                this.damageTimer += dt;
-                if (this.damageTimer >= 0.5) {
-                    this.damageTimer = 0;
-                    for (const entity of game.entities) {
-                        if (entity.team === 'hunters' && entity.isAlive) {
-                            const dist = Utils.distance(user.x, user.y, entity.x, entity.y);
-                            if (dist < this.radius) {
-                                entity.takeDamage(10, user);
-                            }
+            // Damage enemies in range periodically
+            effect.damageTimer += dt;
+            if (effect.damageTimer >= 0.5) {
+                effect.damageTimer = 0;
+                for (const entity of game.entities) {
+                    if (entity.team === 'hunters' && entity.isAlive) {
+                        const dist = Utils.distance(user.x, user.y, entity.x, entity.y);
+                        if (dist < effect.radius) {
+                            entity.takeDamage(10, user);
+                            game.createHitEffect(entity.x, entity.y, '#ff00ff');
                         }
                     }
                 }
             }
-        });
+        };
+        this.effects.push(effect);
     }
 
     createDecoy(user, duration) {
         // Create a fake entity that looks like the monster
-        const decoy = {
+        const effect = {
+            type: 'decoy',
             x: user.x,
             y: user.y,
             radius: user.radius,
@@ -1567,26 +1835,22 @@ class Game extends EventEmitter {
             icon: user.icon,
             facingAngle: user.facingAngle,
             vx: Math.cos(user.facingAngle) * 100,
-            vy: Math.sin(user.facingAngle) * 100
-        };
-
-        this.effects.push({
-            type: 'decoy',
-            ...decoy,
+            vy: Math.sin(user.facingAngle) * 100,
             life: duration,
             duration: duration,
-            age: 0,
-            update: (dt, game) => {
-                // Move decoy forward
-                decoy.x += decoy.vx * dt;
-                decoy.y += decoy.vy * dt;
+            age: 0
+        };
+        effect.update = (dt, game) => {
+            // Move decoy forward
+            effect.x += effect.vx * dt;
+            effect.y += effect.vy * dt;
 
-                // Constrain to map
-                const constrained = game.map.constrainToMap(decoy.x, decoy.y, decoy.radius);
-                decoy.x = constrained.x;
-                decoy.y = constrained.y;
-            }
-        });
+            // Constrain to map
+            const constrained = game.map.constrainToMap(effect.x, effect.y, effect.radius);
+            effect.x = constrained.x;
+            effect.y = constrained.y;
+        };
+        this.effects.push(effect);
     }
 
     createLavaBomb(user, target, options) {
@@ -1601,11 +1865,14 @@ class Game extends EventEmitter {
         });
 
         // Create lava pool at target after delay
+        const poolX = target.x;
+        const poolY = target.y;
         setTimeout(() => {
-            this.effects.push({
+            if (!this.running) return;
+            const effect = {
                 type: 'lava_pool',
-                x: target.x,
-                y: target.y,
+                x: poolX,
+                y: poolY,
                 radius: 50,
                 damage: options.poolDamage,
                 life: options.poolDuration,
@@ -1613,22 +1880,24 @@ class Game extends EventEmitter {
                 age: 0,
                 color: '#ff4400',
                 layer: 'below',
-                damageTimer: 0,
-                update: (dt, game) => {
-                    this.damageTimer += dt;
-                    if (this.damageTimer >= 0.5) {
-                        this.damageTimer = 0;
-                        for (const entity of game.entities) {
-                            if (entity.team === 'hunters' && entity.isAlive) {
-                                const dist = Utils.distance(this.x, this.y, entity.x, entity.y);
-                                if (dist < this.radius) {
-                                    entity.takeDamage(this.damage, null);
-                                }
+                damageTimer: 0
+            };
+            effect.update = (dt, game) => {
+                effect.damageTimer += dt;
+                if (effect.damageTimer >= 0.5) {
+                    effect.damageTimer = 0;
+                    for (const entity of game.entities) {
+                        if (entity.team === 'hunters' && entity.isAlive) {
+                            const dist = Utils.distance(effect.x, effect.y, entity.x, entity.y);
+                            if (dist < effect.radius) {
+                                entity.takeDamage(effect.damage, null);
+                                game.createHitEffect(entity.x, entity.y, '#ff4400');
                             }
                         }
                     }
                 }
-            });
+            };
+            this.effects.push(effect);
         }, 500);
     }
 
@@ -1702,6 +1971,143 @@ class Game extends EventEmitter {
         }
     }
 
+    // ==================== WILDLIFE RESPAWN ====================
+
+    updateWildlifeRespawn(dt) {
+        this.wildlifeRespawnTimer += dt;
+        if (this.wildlifeRespawnTimer < this.wildlifeRespawnInterval) return;
+        this.wildlifeRespawnTimer = 0;
+
+        const aliveWildlife = this.entities.filter(e => e instanceof Wildlife && e.isAlive).length;
+        if (aliveWildlife >= this.maxWildlife) return;
+
+        // Spawn 2-4 new wildlife
+        const spawnCount = Utils.randomInt(2, 4);
+        for (let i = 0; i < spawnCount && aliveWildlife + i < this.maxWildlife; i++) {
+            const x = Utils.random(100, this.map.width - 100);
+            const y = Utils.random(100, this.map.height - 100);
+            const tile = this.map.getTileAt(x, y);
+            if (tile === TerrainType.WATER || tile === TerrainType.ROCK) continue;
+
+            // Check not too close to any player/hunter
+            let tooClose = false;
+            for (const entity of this.entities) {
+                if (entity.team !== 'wildlife' && entity.isAlive) {
+                    if (Utils.distance(x, y, entity.x, entity.y) < 300) {
+                        tooClose = true;
+                        break;
+                    }
+                }
+            }
+            if (tooClose) continue;
+
+            let type = 'small';
+            if (tile === TerrainType.FOREST) {
+                type = Math.random() > 0.5 ? 'medium' : 'small';
+            } else if (tile === TerrainType.CAVE) {
+                type = Math.random() > 0.6 ? 'large' : 'medium';
+            } else {
+                type = Math.random() > 0.8 ? 'medium' : 'small';
+            }
+
+            const wildlife = new Wildlife(x, y, type);
+            this.entities.push(wildlife);
+        }
+    }
+
+    // ==================== DROPSHIP RESPAWN ====================
+
+    updateDropshipRespawn(dt) {
+        if (this.dropshipQueue.length === 0) return;
+
+        this.dropshipTimer += dt;
+        if (this.dropshipTimer < this.dropshipInterval) return;
+        this.dropshipTimer = 0;
+
+        // Respawn all queued hunters
+        const respawnPoint = this.map.spawnPoints.hunters[0];
+        for (const hunter of this.dropshipQueue) {
+            hunter.revive();
+            hunter.health = hunter.maxHealth * 0.75;
+            // Spread spawn positions
+            hunter.x = respawnPoint.x + Utils.random(-60, 60);
+            hunter.y = respawnPoint.y + Utils.random(-60, 60);
+        }
+
+        // Show dropship notification
+        window.ui.showToast('Dropship arrived! Hunters respawned.');
+        Audio.play('ability');
+
+        // Create visual effect at spawn
+        this.createExplosion(respawnPoint.x, respawnPoint.y, {
+            radius: 80,
+            damage: 0,
+            color: '#00aaff'
+        });
+
+        this.dropshipQueue = [];
+        this.dropshipActive = false;
+    }
+
+    queueForDropship(hunter) {
+        if (hunter.isPlayer) return; // Player doesn't auto-respawn
+        if (this.dropshipQueue.includes(hunter)) return;
+        this.dropshipQueue.push(hunter);
+        if (!this.dropshipActive) {
+            this.dropshipActive = true;
+            this.dropshipTimer = 0;
+        }
+    }
+
+    // ==================== POWER RELAY ====================
+
+    updatePowerRelay(dt) {
+        if (!this.powerRelay.active) return;
+
+        // Check if monster is attacking relay
+        const monster = this.getMonster();
+        if (monster && monster.isAlive) {
+            const dist = Utils.distance(monster.x, monster.y, this.powerRelay.x, this.powerRelay.y);
+            if (dist < this.powerRelay.radius + monster.radius + 20) {
+                // Monster is in melee range of relay - auto-attack
+                this.powerRelay.health -= monster.damage * 0.5 * dt;
+                if (Math.random() < 0.05) {
+                    this.createHitEffect(this.powerRelay.x, this.powerRelay.y, '#ff4400');
+                }
+            }
+        }
+
+        // Relay destroyed - monster wins
+        if (this.powerRelay.health <= 0) {
+            this.powerRelay.health = 0;
+            this.endGame(this.player instanceof Monster);
+        }
+    }
+
+    // ==================== SCREEN SHAKE ====================
+
+    addScreenShake(intensity, duration) {
+        this.screenShake.intensity = Math.max(this.screenShake.intensity, intensity);
+        this.screenShake.duration = Math.max(this.screenShake.duration, duration);
+    }
+
+    updateScreenShake(dt) {
+        if (this.screenShake.duration > 0) {
+            this.screenShake.duration -= dt;
+            if (this.screenShake.duration <= 0) {
+                this.screenShake.intensity = 0;
+            }
+        }
+    }
+
+    getScreenShakeOffset() {
+        if (this.screenShake.intensity <= 0) return { x: 0, y: 0 };
+        return {
+            x: (Math.random() - 0.5) * this.screenShake.intensity * 2,
+            y: (Math.random() - 0.5) * this.screenShake.intensity * 2
+        };
+    }
+
     startRoll(user, target, options) {
         const angle = Utils.angle(user.x, user.y, target.x, target.y);
 
@@ -1718,36 +2124,41 @@ class Game extends EventEmitter {
         user.vy = Math.sin(angle) * options.speed;
 
         // Create rolling effect
-        this.effects.push({
+        const effect = {
             type: 'roll',
+            x: user.x,
+            y: user.y,
             entity: user,
             damage: options.damage,
             life: options.duration,
             duration: options.duration,
             age: 0,
-            damageTimer: 0,
-            update: (dt, game) => {
-                this.damageTimer += dt;
-                if (this.damageTimer >= 0.2) {
-                    this.damageTimer = 0;
-                    // Damage hunters on contact
-                    for (const entity of game.entities) {
-                        if (entity.team === 'hunters' && entity.isAlive) {
-                            const dist = Utils.distance(user.x, user.y, entity.x, entity.y);
-                            if (dist < user.radius + entity.radius) {
-                                entity.takeDamage(this.damage, user);
-                                game.createHitEffect(entity.x, entity.y, '#654321');
+            damageTimer: 0
+        };
+        effect.update = (dt, game) => {
+            effect.x = user.x;
+            effect.y = user.y;
+            effect.damageTimer += dt;
+            if (effect.damageTimer >= 0.2) {
+                effect.damageTimer = 0;
+                // Damage hunters on contact
+                for (const entity of game.entities) {
+                    if (entity.team === 'hunters' && entity.isAlive) {
+                        const dist = Utils.distance(user.x, user.y, entity.x, entity.y);
+                        if (dist < user.radius + entity.radius) {
+                            entity.takeDamage(effect.damage, user);
+                            game.createHitEffect(entity.x, entity.y, '#654321');
 
-                                // Knockback
-                                const knockAngle = Utils.angle(user.x, user.y, entity.x, entity.y);
-                                entity.x += Math.cos(knockAngle) * 50;
-                                entity.y += Math.sin(knockAngle) * 50;
-                            }
+                            // Knockback
+                            const knockAngle = Utils.angle(user.x, user.y, entity.x, entity.y);
+                            entity.x += Math.cos(knockAngle) * 50;
+                            entity.y += Math.sin(knockAngle) * 50;
                         }
                     }
                 }
             }
-        });
+        };
+        this.effects.push(effect);
     }
 }
 

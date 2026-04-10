@@ -385,18 +385,59 @@ class UIManager {
         // Health
         const healthPercent = (player.health / player.maxHealth) * 100;
         this.hud.healthBar.style.width = `${healthPercent}%`;
+
+        // Color health bar based on percentage
+        if (healthPercent > 50) {
+            this.hud.healthBar.style.background = 'linear-gradient(90deg, #2ed573, #7bed9f)';
+        } else if (healthPercent > 25) {
+            this.hud.healthBar.style.background = 'linear-gradient(90deg, #ffa502, #ff6348)';
+        } else {
+            this.hud.healthBar.style.background = 'linear-gradient(90deg, #ff4757, #ff6b81)';
+        }
+
         this.hud.healthText.textContent = `${Math.floor(player.health)}/${player.maxHealth}`;
 
         // Timer
         this.hud.timer.textContent = Utils.formatTime(gameTime);
 
-        // Evolution (for monster)
+        // Monster-specific HUD
         if (player instanceof Monster) {
             this.hud.evolutionIndicator.style.display = 'block';
-            this.hud.evolutionIndicator.querySelector('.evo-stage').textContent = `Stage ${player.evolutionStage}`;
-            this.hud.evoProgress.style.width = `${player.getEvolutionPercent()}%`;
+
+            // Evolution info
+            const stageText = player.isEvolving ? 'EVOLVING...' : `Stage ${player.evolutionStage}`;
+            this.hud.evolutionIndicator.querySelector('.evo-stage').textContent = stageText;
+
+            if (player.pendingEvolution && !player.isEvolving) {
+                this.hud.evoProgress.style.width = '100%';
+                this.hud.evoProgress.style.background = '#ff00ff';
+            } else if (player.isEvolving) {
+                const evoPct = (player.evolveTimer / player.evolveDuration) * 100;
+                this.hud.evoProgress.style.width = `${evoPct}%`;
+                this.hud.evoProgress.style.background = '#ff00ff';
+            } else {
+                this.hud.evoProgress.style.width = `${player.getEvolutionPercent()}%`;
+                this.hud.evoProgress.style.background = '';
+            }
+
+            // Armor display
+            if (player.monsterArmor > 0) {
+                this.hud.healthText.textContent = `${Math.floor(player.health)}/${player.maxHealth} | Armor: ${Math.floor(player.monsterArmor)}`;
+            }
         } else {
             this.hud.evolutionIndicator.style.display = 'none';
+        }
+
+        // Hunter-specific HUD (jetpack fuel)
+        if (player instanceof Hunter) {
+            this.hud.healthText.textContent = `${Math.floor(player.health)}/${player.maxHealth} | Fuel: ${Math.floor(player.jetpackFuel)}%`;
+        }
+
+        // Power relay health (when active)
+        if (window.game && window.game.powerRelay && window.game.powerRelay.active) {
+            const relay = window.game.powerRelay;
+            const relayPct = Math.floor((relay.health / relay.maxHealth) * 100);
+            this.hud.timer.textContent = Utils.formatTime(gameTime) + ` | Relay: ${relayPct}%`;
         }
     }
 
@@ -469,6 +510,69 @@ class UIManager {
 
                 bar.appendChild(btn);
             });
+        }
+
+        // Add special action buttons
+        if (player instanceof Monster) {
+            // Sneak button
+            const sneakBtn = document.createElement('button');
+            sneakBtn.className = `ability-btn ${player.sneaking ? 'active-ability' : ''}`;
+            sneakBtn.innerHTML = `<span class="ability-icon">🐾</span><span class="ability-key">Snk</span>`;
+            sneakBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                player.toggleSneak();
+            });
+            sneakBtn.addEventListener('click', () => player.toggleSneak());
+            bar.appendChild(sneakBtn);
+
+            // Smell button
+            const smellBtn = document.createElement('button');
+            const smellReady = player.smellCooldown <= 0;
+            smellBtn.className = `ability-btn ${!smellReady ? 'on-cooldown' : ''} ${player.smellActive ? 'active-ability' : ''}`;
+            smellBtn.innerHTML = `<span class="ability-icon">👃</span><span class="ability-key">Q</span>
+                ${!smellReady ? `<span class="cooldown-overlay">${Math.ceil(player.smellCooldown)}s</span>` : ''}`;
+            smellBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                player.useSmell();
+            });
+            smellBtn.addEventListener('click', () => player.useSmell());
+            bar.appendChild(smellBtn);
+
+            // Evolve button (when ready)
+            if (player.pendingEvolution && !player.isEvolving) {
+                const evolveBtn = document.createElement('button');
+                evolveBtn.className = 'ability-btn evolve-ready';
+                evolveBtn.innerHTML = `<span class="ability-icon">🧬</span><span class="ability-key">E</span>`;
+                evolveBtn.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    player.startEvolution();
+                    window.ui.showToast('Evolving! Stay hidden for 5 seconds...');
+                });
+                evolveBtn.addEventListener('click', () => {
+                    player.startEvolution();
+                    window.ui.showToast('Evolving! Stay hidden for 5 seconds...');
+                });
+                bar.appendChild(evolveBtn);
+            }
+        }
+
+        // Dodge/boost button for hunters
+        if (player instanceof Hunter) {
+            const dodgeBtn = document.createElement('button');
+            const canDodge = player.jetpackFuel >= 25 && player.dodgeCooldown <= 0;
+            dodgeBtn.className = `ability-btn ${!canDodge ? 'on-cooldown' : ''}`;
+            dodgeBtn.innerHTML = `<span class="ability-icon">💨</span><span class="ability-key">Sft</span>
+                ${!canDodge && player.dodgeCooldown > 0 ? `<span class="cooldown-overlay">${Math.ceil(player.dodgeCooldown)}s</span>` : ''}`;
+            dodgeBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const dir = player.direction;
+                player.jetpackBoost(dir.x || 0, dir.y || 1);
+            });
+            dodgeBtn.addEventListener('click', () => {
+                const dir = player.direction;
+                player.jetpackBoost(dir.x || 0, dir.y || 1);
+            });
+            bar.appendChild(dodgeBtn);
         }
     }
 

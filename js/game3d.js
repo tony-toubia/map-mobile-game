@@ -69,9 +69,14 @@ class Game3D extends Game {
     update3D(dt) {
         const time = this.renderer3d.clock.getElapsedTime();
 
-        // Update camera to follow player
+        // Update camera to follow player (with screen shake)
         if (this.player) {
-            this.renderer3d.updateCamera(this.player.x, this.player.y, dt);
+            const shake = this.getScreenShakeOffset();
+            this.renderer3d.updateCamera(
+                this.player.x + shake.x * 10,
+                this.player.y + shake.y * 10,
+                dt
+            );
         }
 
         // Update terrain animations
@@ -155,15 +160,14 @@ class Game3D extends Game {
                 proj.mesh3d = mesh;
 
                 // Create trail effect
-                proj.trail3d = this.effects3d.createProjectileTrail(proj);
+                if (this.effects3d.createProjectileTrail) {
+                    proj.trail3d = this.effects3d.createProjectileTrail(proj);
+                }
             }
 
             if (proj.mesh3d) {
-                const worldPos = this.renderer3d.gameToWorld(
-                    proj.x - this.map.width / 2,
-                    proj.y - this.map.height / 2
-                );
-                proj.mesh3d.position.set(worldPos.x * 20, 0.5, worldPos.z * 20);
+                const worldPos = this.renderer3d.gameToWorld(proj.x, proj.y);
+                proj.mesh3d.position.set(worldPos.x, 0.5, worldPos.z);
             }
         }
 
@@ -252,6 +256,31 @@ class Game3D extends Game {
                 color: entity.color || 0xffffff,
                 radius: radius
             });
+        }
+
+        // Screen shake
+        this.addScreenShake(radius * 0.05, 0.2);
+    }
+
+    createTrap(x, y, options) {
+        super.createTrap(x, y, options);
+        // Add 3D glow for trap
+        if (this.renderer3d) {
+            this.renderer3d.requestDynamicLight(x, y, 0x888888, 1, 2);
+        }
+    }
+
+    createSlashEffect(user) {
+        super.createSlashEffect(user);
+        if (this.renderer3d) {
+            this.renderer3d.requestDynamicLight(user.x, user.y, 0xff00ff, 2, 0.3);
+        }
+    }
+
+    createLightningStorm(x, y, options) {
+        super.createLightningStorm(x, y, options);
+        if (this.renderer3d) {
+            this.renderer3d.requestDynamicLight(x, y, 0x00ffff, 3, options.duration);
         }
     }
 

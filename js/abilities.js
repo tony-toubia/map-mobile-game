@@ -62,8 +62,10 @@ class Ability {
     upgrade() {
         if (this.level < this.maxLevel) {
             this.level++;
-            this.damage *= 1.2;
-            this.cooldown *= 0.9;
+            this.damage *= 1.25;
+            this.cooldown *= 0.85;
+            if (this.duration > 0) this.duration *= 1.15;
+            if (this.range > 0) this.range *= 1.1;
             return true;
         }
         return false;

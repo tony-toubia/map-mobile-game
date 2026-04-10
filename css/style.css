@@ -506,6 +506,28 @@ html, body {
     border-color: var(--text-secondary);
 }
 
+.ability-btn.active-ability {
+    border-color: var(--success-color);
+    background: rgba(46, 213, 115, 0.2);
+    box-shadow: 0 0 10px rgba(46, 213, 115, 0.3);
+}
+
+.ability-btn.evolve-ready {
+    border-color: #ff00ff;
+    animation: evolveGlow 1s ease-in-out infinite;
+}
+
+@keyframes evolveGlow {
+    0%, 100% {
+        box-shadow: 0 0 5px rgba(255, 0, 255, 0.3);
+        border-color: #ff00ff;
+    }
+    50% {
+        box-shadow: 0 0 20px rgba(255, 0, 255, 0.6);
+        border-color: #ff66ff;
+    }
+}
+
 .ability-btn .ability-icon {
     font-size: 1.5rem;
 }
@@ -544,13 +566,30 @@ html, body {
 .mobile-controls {
     position: absolute;
     bottom: 80px;
-    left: 20px;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-between;
+    padding: 0 20px;
+    pointer-events: none;
+}
+
+.mobile-controls > * {
     pointer-events: auto;
 }
 
 .joystick-container {
     width: 120px;
     height: 120px;
+}
+
+.aim-joystick .joystick-base {
+    border-color: rgba(255, 100, 100, 0.3);
+    background: rgba(255, 100, 100, 0.05);
+}
+
+.aim-joystick .joystick-knob {
+    background: rgba(255, 100, 100, 0.5);
 }
 
 .joystick-base {

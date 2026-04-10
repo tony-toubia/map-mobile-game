@@ -27,7 +27,10 @@ class Renderer3D {
 
         // Set background color
         this.scene.background = new THREE.Color(0x1a1a2e);
-        this.scene.fog = new THREE.Fog(0x1a1a2e, 50, 150);
+        this.scene.fog = new THREE.Fog(0x1a1a2e, 80, 200);
+
+        // World scale: game coords * this = 3D coords
+        this.worldScale = 0.05;
 
         // Setup camera (isometric view)
         this.setupCamera();
@@ -110,12 +113,8 @@ class Renderer3D {
      * Update camera to follow target
      */
     updateCamera(targetX, targetY, dt) {
-        // Convert 2D game coords to 3D (x stays x, y becomes z)
-        const targetPos = new THREE.Vector3(
-            targetX * 0.05, // Scale down game coords
-            0,
-            targetY * 0.05
-        );
+        // Convert 2D game coords to 3D world coords
+        const targetPos = this.gameToWorld(targetX, targetY);
 
         // Smooth camera follow
         this.cameraTarget.lerp(targetPos, 0.1);
@@ -127,20 +126,21 @@ class Renderer3D {
 
         // Update shadow camera position to follow
         this.sunLight.position.set(
-            this.cameraTarget.x + 50,
-            100,
-            this.cameraTarget.z + 50
+            this.cameraTarget.x + 30,
+            60,
+            this.cameraTarget.z + 30
         );
         this.sunLight.target.position.copy(this.cameraTarget);
     }
 
     /**
-     * Request a dynamic light for effects
+     * Request a dynamic light for effects (takes game coordinates)
      */
     requestDynamicLight(x, y, color, intensity, life) {
         for (const lightData of this.dynamicLights) {
             if (!lightData.active) {
-                lightData.light.position.set(x * 0.05, 2, y * 0.05);
+                const pos = this.gameToWorld(x, y);
+                lightData.light.position.set(pos.x, 2, pos.z);
                 lightData.light.color.setHex(color);
                 lightData.light.intensity = intensity;
                 lightData.active = true;
@@ -173,9 +173,14 @@ class Renderer3D {
 
     /**
      * Convert game coordinates to 3D world coordinates
+     * Game coords: (0,0) to (2000,2000), 3D coords: centered at origin
      */
     gameToWorld(gameX, gameY) {
-        return new THREE.Vector3(gameX * 0.05, 0, gameY * 0.05);
+        return new THREE.Vector3(
+            (gameX - 1000) * this.worldScale,
+            0,
+            (gameY - 1000) * this.worldScale
+        );
     }
 
     /**
